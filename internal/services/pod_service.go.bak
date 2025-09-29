@@ -1,0 +1,643 @@
+package services
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/carlosf/k8s-pod-manager/internal/database"
+	"github.com/carlosf/k8s-pod-manager/internal/kubernetes"
+	"github.com/carlosf/k8s-pod-manager/internal/models"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+type PodService struct{}
+
+func NewPodService() *PodService {
+	return &PodService{}
+}
+
+type PodInfo struct {
+	Name           string            `json:"name"`
+	Namespace      string            `json:"namespace"`
+	Phase          corev1.PodPhase   `json:"phase"`
+	PodIP          string            `json:"pod_ip,omitempty"`
+	HostIP         string            `json:"host_ip,omitempty"`
+	NodeName       string            `json:"node_name,omitempty"`
+	Age            string            `json:"age"`
+	Ready          string            `json:"ready"`
+	Restarts       int32             `json:"restarts"`
+	Owners         []string          `json:"owners,omitempty"`
+	ControllerType string            `json:"controller_type"`
+	Containers     []ContainerInfo   `json:"containers"`
+	Labels         map[string]string `json:"labels,omitempty"`
+}
+
+type ContainerInfo struct {
+	Name         string `json:"name"`
+	Image        string `json:"image"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restart_count"`
+	State        string `json:"state"`
+}
+
+type NamespaceInfo struct {
+	Name        string            `json:"name"`
+	Status      string            `json:"status"`
+	Age         string            `json:"age"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+func (s *PodService) ListPods(ctx context.Context, namespace string) ([]PodInfo, error) {
+	pods, err := kubernetes.Client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	podInfos := make([]PodInfo, 0, len(pods.Items))
+	now := time.Now()
+
+	for _, pod := range pods.Items {
+		podInfo := s.convertPodToInfo(pod, now)
+		podInfos = append(podInfos, podInfo)
+	}
+
+	return podInfos, nil
+}
+
+func (s *PodService) ListAllPods(ctx context.Context, namespace *string) ([]PodInfo, error) {
+	namespaceFilter := ""
+	if namespace != nil && *namespace != "" {
+		namespaceFilter = *namespace
+	}
+
+	pods, err := kubernetes.Client.CoreV1().Pods(namespaceFilter).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	podInfos := make([]PodInfo, 0, len(pods.Items))
+	now := time.Now()
+
+	for _, pod := range pods.Items {
+		podInfo := s.convertPodToInfo(pod, now)
+		podInfos = append(podInfos, podInfo)
+	}
+
+	return podInfos, nil
+}
+
+func (s *PodService) GetPod(ctx context.Context, namespace, name string) (*PodInfo, error) {
+	pod, err := kubernetes.Client.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	podInfo := s.convertPodToInfo(*pod, time.Now())
+	return &podInfo, nil
+}
+
+func (s *PodService) RestartPod(ctx context.Context, namespace, podName, executedBy string) (map[string]interface{}, error) {
+	pod, err := kubernetes.Client.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pod: %w", err)
+	}
+
+	controllerKind, controllerName := s.getController(*pod)
+
+	operation := &models.PodOperation{
+		PodName:        podName,
+		Namespace:      namespace,
+		Operation:      "restart",
+		Controller:     controllerKind,
+		ControllerName: controllerName,
+		ExecutedBy:     executedBy,
+		ExecutedAt:     time.Now(),
+	}
+
+	result := make(map[string]interface{})
+
+	switch controllerKind {
+	case "Deployment":
+		err = s.rolloutRestartDeployment(ctx, namespace, controllerName)
+		if err != nil {
+			operation.Status = "failed"
+			operation.Message = err.Error()
+			database.DB.Create(operation)
+			return nil, err
+		}
+		operation.Status = "success"
+		operation.Message = "Rollout restart initiated for deployment"
+		result = map[string]interface{}{
+			"message":    "Rollout restart initiated",
+			"type":       "deployment",
+			"deployment": controllerName,
+			"pod":        podName,
+			"namespace":  namespace,
+		}
+
+	case "StatefulSet":
+		err = s.rolloutRestartStatefulSet(ctx, namespace, controllerName)
+		if err != nil {
+			operation.Status = "failed"
+			operation.Message = err.Error()
+			database.DB.Create(operation)
+			return nil, err
+		}
+		operation.Status = "success"
+		operation.Message = "Rollout restart initiated for statefulset"
+		result = map[string]interface{}{
+			"message":     "Rollout restart initiated",
+			"type":        "statefulset",
+			"statefulset": controllerName,
+			"pod":         podName,
+			"namespace":   namespace,
+		}
+
+	case "DaemonSet", "ReplicaSet":
+		err = kubernetes.Client.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+		if err != nil {
+			operation.Status = "failed"
+			operation.Message = err.Error()
+			database.DB.Create(operation)
+			return nil, err
+		}
+		operation.Status = "success"
+		operation.Message = fmt.Sprintf("Pod deleted, %s will recreate", controllerKind)
+		result = map[string]interface{}{
+			"message":    "Pod deleted for recreation",
+			"type":       controllerKind,
+			"controller": controllerName,
+			"pod":        podName,
+			"namespace":  namespace,
+		}
+
+	default:
+		err = kubernetes.Client.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+		if err != nil {
+			operation.Status = "failed"
+			operation.Message = err.Error()
+			database.DB.Create(operation)
+			return nil, err
+		}
+		operation.Status = "success"
+		operation.Message = "Pod deleted (no controller, will not be recreated)"
+		result = map[string]interface{}{
+			"message":   "Pod deleted (no controller)",
+			"warning":   "Pod will not be automatically recreated",
+			"pod":       podName,
+			"namespace": namespace,
+		}
+	}
+
+	database.DB.Create(operation)
+	return result, nil
+}
+
+func (s *PodService) DeletePod(ctx context.Context, namespace, podName, executedBy string) error {
+	operation := &models.PodOperation{
+		PodName:    podName,
+		Namespace:  namespace,
+		Operation:  "delete",
+		ExecutedBy: executedBy,
+		ExecutedAt: time.Now(),
+	}
+
+	err := kubernetes.Client.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+	if err != nil {
+		operation.Status = "failed"
+		operation.Message = err.Error()
+		database.DB.Create(operation)
+		return fmt.Errorf("failed to delete pod: %w", err)
+	}
+
+	operation.Status = "success"
+	operation.Message = "Pod deleted successfully"
+	database.DB.Create(operation)
+	return nil
+}
+
+func (s *PodService) ScaleDeployment(ctx context.Context, namespace, deploymentName string, replicas int32, executedBy string) (map[string]interface{}, error) {
+	deployment, err := kubernetes.Client.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment: %w", err)
+	}
+
+	previousReplicas := *deployment.Spec.Replicas
+
+	scaleOp := &models.DeploymentScale{
+		DeploymentName:   deploymentName,
+		Namespace:        namespace,
+		PreviousReplicas: previousReplicas,
+		NewReplicas:      replicas,
+		ExecutedBy:       executedBy,
+		ExecutedAt:       time.Now(),
+	}
+
+	if replicas == 0 {
+		scaleOp.Reason = "Stopping deployment"
+	} else if previousReplicas == 0 {
+		scaleOp.Reason = "Starting deployment"
+	} else {
+		scaleOp.Reason = fmt.Sprintf("Scaling from %d to %d replicas", previousReplicas, replicas)
+	}
+
+	deployment.Spec.Replicas = &replicas
+	updatedDeployment, err := kubernetes.Client.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to scale deployment: %w", err)
+	}
+
+	database.DB.Create(scaleOp)
+
+	return map[string]interface{}{
+		"message":           "Deployment scaled successfully",
+		"deployment":        deploymentName,
+		"namespace":         namespace,
+		"previous_replicas": previousReplicas,
+		"new_replicas":      *updatedDeployment.Spec.Replicas,
+		"action":            scaleOp.Reason,
+	}, nil
+}
+
+func (s *PodService) convertPodToInfo(pod corev1.Pod, now time.Time) PodInfo {
+	owners := []string{}
+	for _, owner := range pod.OwnerReferences {
+		owners = append(owners, fmt.Sprintf("%s/%s", owner.Kind, owner.Name))
+	}
+
+	containers := []ContainerInfo{}
+	totalRestarts := int32(0)
+	readyContainers := 0
+	totalContainers := len(pod.Spec.Containers)
+
+	for i, container := range pod.Spec.Containers {
+		containerInfo := ContainerInfo{
+			Name:  container.Name,
+			Image: container.Image,
+		}
+
+		if i < len(pod.Status.ContainerStatuses) {
+			status := pod.Status.ContainerStatuses[i]
+			containerInfo.Ready = status.Ready
+			containerInfo.RestartCount = status.RestartCount
+			totalRestarts += status.RestartCount
+
+			if status.Ready {
+				readyContainers++
+			}
+
+			if status.State.Running != nil {
+				containerInfo.State = "Running"
+			} else if status.State.Waiting != nil {
+				containerInfo.State = fmt.Sprintf("Waiting: %s", status.State.Waiting.Reason)
+			} else if status.State.Terminated != nil {
+				containerInfo.State = fmt.Sprintf("Terminated: %s", status.State.Terminated.Reason)
+			}
+		}
+
+		containers = append(containers, containerInfo)
+	}
+
+	age := now.Sub(pod.CreationTimestamp.Time)
+	ageStr := s.formatDuration(age)
+	ready := fmt.Sprintf("%d/%d", readyContainers, totalContainers)
+
+	controllerType := s.getControllerType(pod)
+
+	return PodInfo{
+		Name:           pod.Name,
+		Namespace:      pod.Namespace,
+		Phase:          pod.Status.Phase,
+		PodIP:          pod.Status.PodIP,
+		HostIP:         pod.Status.HostIP,
+		NodeName:       pod.Spec.NodeName,
+		Age:            ageStr,
+		Ready:          ready,
+		Restarts:       totalRestarts,
+		Owners:         owners,
+		ControllerType: controllerType,
+		Containers:     containers,
+		Labels:         pod.Labels,
+	}
+}
+
+func (s *PodService) getController(pod corev1.Pod) (kind, name string) {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller {
+			if owner.Kind == "ReplicaSet" {
+				rs, err := kubernetes.Client.AppsV1().ReplicaSets(pod.Namespace).Get(context.Background(), owner.Name, metav1.GetOptions{})
+				if err == nil && len(rs.OwnerReferences) > 0 {
+					for _, rsOwner := range rs.OwnerReferences {
+						if rsOwner.Kind == "Deployment" {
+							return "Deployment", rsOwner.Name
+						}
+					}
+				}
+			}
+			return owner.Kind, owner.Name
+		}
+	}
+	if len(pod.OwnerReferences) > 0 {
+		owner := pod.OwnerReferences[0]
+		return owner.Kind, owner.Name
+	}
+	return "", ""
+}
+
+func (s *PodService) getControllerType(pod corev1.Pod) string {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller {
+			switch owner.Kind {
+			case "ReplicaSet":
+				// Check if ReplicaSet is owned by a Deployment
+				rs, err := kubernetes.Client.AppsV1().ReplicaSets(pod.Namespace).Get(context.Background(), owner.Name, metav1.GetOptions{})
+				if err == nil && len(rs.OwnerReferences) > 0 {
+					for _, rsOwner := range rs.OwnerReferences {
+						if rsOwner.Kind == "Deployment" {
+							return "Deployment"
+						}
+					}
+				}
+				return "ReplicaSet"
+			case "DaemonSet":
+				return "DaemonSet"
+			case "StatefulSet":
+				return "StatefulSet"
+			case "Job":
+				// Check if Job is owned by a CronJob
+				job, err := kubernetes.Client.BatchV1().Jobs(pod.Namespace).Get(context.Background(), owner.Name, metav1.GetOptions{})
+				if err == nil && len(job.OwnerReferences) > 0 {
+					for _, jobOwner := range job.OwnerReferences {
+						if jobOwner.Controller != nil && *jobOwner.Controller && jobOwner.Kind == "CronJob" {
+							return "CronJob"
+						}
+					}
+				}
+				return "Job"
+			case "CronJob":
+				return "CronJob"
+			default:
+				return owner.Kind
+			}
+		}
+	}
+
+	// Check for other patterns in labels or annotations that might indicate controller type
+	if pod.Labels != nil {
+		// Check for common controller labels
+		if _, ok := pod.Labels["app.kubernetes.io/managed-by"]; ok {
+			if managedBy := pod.Labels["app.kubernetes.io/managed-by"]; managedBy != "" {
+				return strings.Title(managedBy)
+			}
+		}
+
+		// Check for job-related labels
+		if _, ok := pod.Labels["job-name"]; ok {
+			return "Job"
+		}
+
+		// Check for batch job labels
+		if _, ok := pod.Labels["batch.kubernetes.io/job-name"]; ok {
+			return "Job"
+		}
+	}
+
+	// If no controller found, return "Standalone"
+	return "Standalone"
+}
+
+func (s *PodService) rolloutRestartDeployment(ctx context.Context, namespace, name string) error {
+	patch := []byte(fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`,
+		time.Now().Format(time.RFC3339)))
+	_, err := kubernetes.Client.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	return err
+}
+
+func (s *PodService) rolloutRestartStatefulSet(ctx context.Context, namespace, name string) error {
+	patch := []byte(fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`,
+		time.Now().Format(time.RFC3339)))
+	_, err := kubernetes.Client.AppsV1().StatefulSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	return err
+}
+
+func (s *PodService) formatDuration(d time.Duration) string {
+	days := int(d.Hours() / 24)
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%dd%dh", days, hours)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+func (s *PodService) GetDeployment(ctx context.Context, namespace, name string) (*appsv1.Deployment, error) {
+	return kubernetes.Client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+}
+
+func (s *PodService) ListDeployments(ctx context.Context, namespace string) (*appsv1.DeploymentList, error) {
+	return kubernetes.Client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+}
+
+func (s *PodService) ListStatefulSets(ctx context.Context, namespace string) (*appsv1.StatefulSetList, error) {
+	return kubernetes.Client.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
+}
+
+func (s *PodService) ScaleStatefulSet(ctx context.Context, namespace, statefulSetName string, replicas int32, executedBy string) (map[string]interface{}, error) {
+	statefulSet, err := kubernetes.Client.AppsV1().StatefulSets(namespace).Get(ctx, statefulSetName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get statefulset: %w", err)
+	}
+
+	previousReplicas := *statefulSet.Spec.Replicas
+
+	scaleOp := &models.DeploymentScale{
+		DeploymentName:   statefulSetName,
+		Namespace:        namespace,
+		PreviousReplicas: previousReplicas,
+		NewReplicas:      replicas,
+		ExecutedBy:       executedBy,
+		ExecutedAt:       time.Now(),
+	}
+
+	if replicas == 0 {
+		scaleOp.Reason = "Stopping statefulset"
+	} else if previousReplicas == 0 {
+		scaleOp.Reason = "Starting statefulset"
+	} else {
+		scaleOp.Reason = fmt.Sprintf("Scaling from %d to %d replicas", previousReplicas, replicas)
+	}
+
+	statefulSet.Spec.Replicas = &replicas
+	updatedStatefulSet, err := kubernetes.Client.AppsV1().StatefulSets(namespace).Update(ctx, statefulSet, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to scale statefulset: %w", err)
+	}
+
+	database.DB.Create(scaleOp)
+
+	return map[string]interface{}{
+		"message":           "StatefulSet scaled successfully",
+		"statefulset":       statefulSetName,
+		"namespace":         namespace,
+		"previous_replicas": previousReplicas,
+		"new_replicas":      *updatedStatefulSet.Spec.Replicas,
+		"action":            scaleOp.Reason,
+	}, nil
+}
+
+func (s *PodService) ListNamespaces(ctx context.Context) ([]NamespaceInfo, error) {
+	namespaces, err := kubernetes.Client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list namespaces: %w", err)
+	}
+
+	namespaceInfos := make([]NamespaceInfo, 0, len(namespaces.Items))
+	now := time.Now()
+
+	for _, ns := range namespaces.Items {
+		age := now.Sub(ns.CreationTimestamp.Time)
+		ageStr := s.formatDuration(age)
+
+		status := "Active"
+		if ns.Status.Phase != corev1.NamespaceActive {
+			status = string(ns.Status.Phase)
+		}
+
+		namespaceInfo := NamespaceInfo{
+			Name:        ns.Name,
+			Status:      status,
+			Age:         ageStr,
+			Labels:      ns.Labels,
+			Annotations: ns.Annotations,
+		}
+
+		namespaceInfos = append(namespaceInfos, namespaceInfo)
+	}
+
+	return namespaceInfos, nil
+}
+
+type PodWatchEvent struct {
+	Type   string  `json:"type"`
+	Pod    PodInfo `json:"pod"`
+	Reason string  `json:"reason,omitempty"`
+}
+
+func (s *PodService) WatchPods(ctx context.Context, namespace string, eventsChan chan<- PodWatchEvent) error {
+	watcher, err := kubernetes.Client.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create pod watcher: %w", err)
+	}
+	defer watcher.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return fmt.Errorf("watch channel closed")
+			}
+
+			pod, ok := event.Object.(*corev1.Pod)
+			if !ok {
+				continue
+			}
+
+			podInfo := s.convertPodToInfo(*pod, time.Now())
+
+			eventType := string(event.Type)
+			reason := ""
+
+			// Extract reason from pod events if available
+			if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+				if len(pod.Status.ContainerStatuses) > 0 {
+					cs := pod.Status.ContainerStatuses[0]
+					if cs.State.Terminated != nil {
+						reason = cs.State.Terminated.Reason
+					} else if cs.State.Waiting != nil {
+						reason = cs.State.Waiting.Reason
+					}
+				}
+			}
+
+			watchEvent := PodWatchEvent{
+				Type:   eventType,
+				Pod:    podInfo,
+				Reason: reason,
+			}
+
+			select {
+			case eventsChan <- watchEvent:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+func (s *PodService) WatchAllPods(ctx context.Context, eventsChan chan<- PodWatchEvent) error {
+	watcher, err := kubernetes.Client.CoreV1().Pods("").Watch(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create all pods watcher: %w", err)
+	}
+	defer watcher.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return fmt.Errorf("watch channel closed")
+			}
+
+			pod, ok := event.Object.(*corev1.Pod)
+			if !ok {
+				continue
+			}
+
+			podInfo := s.convertPodToInfo(*pod, time.Now())
+
+			eventType := string(event.Type)
+			reason := ""
+
+			// Extract reason from pod events if available
+			if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+				if len(pod.Status.ContainerStatuses) > 0 {
+					cs := pod.Status.ContainerStatuses[0]
+					if cs.State.Terminated != nil {
+						reason = cs.State.Terminated.Reason
+					} else if cs.State.Waiting != nil {
+						reason = cs.State.Waiting.Reason
+					}
+				}
+			}
+
+			watchEvent := PodWatchEvent{
+				Type:   eventType,
+				Pod:    podInfo,
+				Reason: reason,
+			}
+
+			select {
+			case eventsChan <- watchEvent:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+}
