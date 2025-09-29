@@ -1,0 +1,219 @@
+# GraphQL schema definition for K8s Pod Manager API
+
+scalar Time
+
+# Health Check Types
+type HealthResponse {
+  status: String!
+  timestamp: Time!
+  uptime: String!
+  version: String!
+}
+
+type ReadinessCheck {
+  database: String!
+  kubernetes: String!
+}
+
+type ReadinessResponse {
+  status: String!
+  checks: ReadinessCheck!
+  timestamp: Time!
+}
+
+type SystemInfo {
+  name: String!
+  version: String!
+  uptime: String!
+}
+
+type KubernetesInfo {
+  version: String!
+  platform: String!
+}
+
+type DatabaseInfo {
+  openConnections: Int!
+  inUse: Int!
+  idle: Int!
+}
+
+type InfoResponse {
+  service: SystemInfo!
+  kubernetes: KubernetesInfo!
+  database: DatabaseInfo!
+  timestamp: Time!
+}
+
+# Namespace Types
+type NamespaceInfo {
+  name: String!
+  status: String!
+  age: String!
+  labels: [KeyValue!]!
+  annotations: [KeyValue!]!
+}
+
+type KeyValue {
+  key: String!
+  value: String!
+}
+
+# Pod Types
+type ContainerInfo {
+  name: String!
+  image: String!
+  ready: Boolean!
+  restartCount: Int!
+  state: String!
+}
+
+type PodInfo {
+  name: String!
+  namespace: String!
+  phase: String!
+  podIP: String
+  hostIP: String
+  nodeName: String
+  age: String!
+  ready: String!
+  restarts: Int!
+  owners: [String!]!
+  controllerType: String!
+  containers: [ContainerInfo!]!
+  labels: [KeyValue!]!
+}
+
+# Deployment Types
+type DeploymentInfo {
+  name: String!
+  namespace: String!
+  replicas: Int!
+  updatedReplicas: Int!
+  readyReplicas: Int!
+  availableReplicas: Int!
+  labels: [KeyValue!]!
+  createdAt: Time!
+}
+
+# StatefulSet Types
+type StatefulSetInfo {
+  name: String!
+  namespace: String!
+  replicas: Int!
+  readyReplicas: Int!
+  currentReplicas: Int!
+  updatedReplicas: Int!
+  labels: [KeyValue!]!
+  createdAt: Time!
+}
+
+# Operation Response Types
+type RestartPodResponse {
+  message: String!
+  type: String!
+  deployment: String
+  statefulset: String
+  controller: String
+  pod: String!
+  namespace: String!
+  warning: String
+}
+
+type ScaleResponse {
+  message: String!
+  deployment: String
+  statefulset: String
+  namespace: String!
+  previousReplicas: Int!
+  newReplicas: Int!
+  action: String!
+}
+
+type DeletePodResponse {
+  message: String!
+  pod: String!
+  namespace: String!
+}
+
+# Input Types
+input ScaleInput {
+  replicas: Int!
+}
+
+# List Response Types
+type NamespaceListResponse {
+  count: Int!
+  namespaces: [NamespaceInfo!]!
+}
+
+type PodListResponse {
+  namespace: String!
+  count: Int!
+  pods: [PodInfo!]!
+}
+
+type AllPodsResponse {
+  count: Int!
+  pods: [PodInfo!]!
+}
+
+type DeploymentListResponse {
+  namespace: String!
+  count: Int!
+  deployments: [DeploymentInfo!]!
+}
+
+type StatefulSetListResponse {
+  namespace: String!
+  count: Int!
+  statefulsets: [StatefulSetInfo!]!
+}
+
+# Queries
+type Query {
+  # Health Endpoints
+  health: HealthResponse!
+  readiness: ReadinessResponse!
+  info: InfoResponse!
+
+  # Namespace Operations
+  namespaces: NamespaceListResponse!
+
+  # Pod Operations
+  pods(namespace: String!): PodListResponse!
+  allPods(namespace: String): AllPodsResponse!
+  pod(namespace: String!, name: String!): PodInfo!
+
+  # Deployment Operations
+  deployments(namespace: String!): DeploymentListResponse!
+
+  # StatefulSet Operations
+  statefulsets(namespace: String!): StatefulSetListResponse!
+}
+
+# Mutations
+type Mutation {
+  # Pod Operations
+  restartPod(namespace: String!, name: String!, user: String): RestartPodResponse!
+  deletePod(namespace: String!, name: String!, user: String): DeletePodResponse!
+
+  # Deployment Operations
+  scaleDeployment(namespace: String!, name: String!, input: ScaleInput!, user: String): ScaleResponse!
+
+  # StatefulSet Operations
+  scaleStatefulSet(namespace: String!, name: String!, input: ScaleInput!, user: String): ScaleResponse!
+}
+
+# Subscriptions for WebSocket functionality
+type Subscription {
+  watchPods(namespace: String!): PodWatchEvent!
+  watchAllPods: PodWatchEvent!
+}
+
+# WebSocket Event Types
+type PodWatchEvent {
+  type: String!
+  pod: PodInfo!
+  reason: String
+}
