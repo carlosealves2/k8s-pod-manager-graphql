@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GraphQL Subscription Test</title>
+    <script src="https://unpkg.com/graphql-ws/lib/use/ws.js"></script>
+</head>
+<body>
+    <h1>GraphQL Subscription Test</h1>
+    <div id="messages"></div>
+    <button onclick="startSubscription()">Start Pod Watching</button>
+    <button onclick="stopSubscription()">Stop</button>
+
+    <script>
+        let client;
+        let subscription;
+
+        function log(message) {
+            const div = document.getElementById('messages');
+            div.innerHTML += '<p>' + new Date().toISOString() + ': ' + message + '</p>';
+            console.log(message);
+        }
+
+        function startSubscription() {
+            if (typeof window.WebSocket === 'undefined') {
+                log('WebSocket not supported');
+                return;
+            }
+
+            // Create WebSocket connection for GraphQL subscriptions
+            const ws = new WebSocket('ws://localhost:8080/graphql', 'graphql-ws');
+
+            ws.onopen = function() {
+                log('WebSocket connected');
+
+                // Send connection init
+                ws.send(JSON.stringify({
+                    type: 'connection_init'
+                }));
+            };
+
+            ws.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                log('Received: ' + JSON.stringify(message, null, 2));
+
+                if (message.type === 'connection_ack') {
+                    log('Connection acknowledged, starting subscription...');
+
+                    // Start subscription
+                    ws.send(JSON.stringify({
+                        id: 'subscription-1',
+                        type: 'start',
+                        payload: {
+                            query: `
+                                subscription {
+                                    watchPods(namespace: "default") {
+                                        type
+                                        pod {
+                                            name
+                                            phase
+                                            ready
+                                            restarts
+                                        }
+                                        reason
+                                    }
+                                }
+                            `
+                        }
+                    }));
+                } else if (message.type === 'data') {
+                    log('Pod event: ' + JSON.stringify(message.payload.data, null, 2));
+                } else if (message.type === 'error') {
+                    log('Error: ' + JSON.stringify(message.payload, null, 2));
+                }
+            };
+
+            ws.onerror = function(error) {
+                log('WebSocket error: ' + error);
+            };
+
+            ws.onclose = function() {
+                log('WebSocket connection closed');
+            };
+
+            window.testWs = ws;
+        }
+
+        function stopSubscription() {
+            if (window.testWs) {
+                window.testWs.close();
+                log('Subscription stopped');
+            }
+        }
+    </script>
+</body>
+</html>

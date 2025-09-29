@@ -1,0 +1,1260 @@
+openapi: 3.0.3
+info:
+  title: K8s Pod Manager API
+  description: |
+    API REST para gerenciamento de pods Kubernetes com auditoria completa.
+
+    Funcionalidades principais:
+    - Listar namespaces e pods
+    - Obter detalhes de pods específicos
+    - Reiniciar pods (rollout restart para Deployments/StatefulSets)
+    - Deletar pods
+    - Escalar Deployments (parar/iniciar)
+    - Monitoramento live via WebSocket
+    - Auditoria completa em PostgreSQL
+    - Health checks e métricas
+
+    ## Arquitetura
+    - **Backend**: Go 1.24.7 + Fiber v2
+    - **Database**: PostgreSQL 15 (auditoria)
+    - **Kubernetes**: client-go
+    - **Deploy**: Docker + Kubernetes
+
+  version: 1.0.0
+  contact:
+    name: K8s Pod Manager
+    url: https://github.com/carlosf/k8s-pod-manager
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Desenvolvimento local
+  - url: https://k8s-pod-manager.example.com/api/v1
+    description: Produção
+
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+
+paths:
+  /:
+    get:
+      tags:
+        - System
+      summary: API Root
+      description: Retorna informações da API e lista de endpoints disponíveis
+      operationId: getRoot
+      responses:
+        '200':
+          description: Informações da API
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiInfo'
+              example:
+                service: "K8s Pod Manager API"
+                version: "1.0.0"
+                endpoints:
+                  health: "/api/v1/health"
+                  list_namespaces: "/api/v1/namespaces"
+                  watch_pods: "/api/v1/namespaces/watch"
+                  list_pods: "/api/v1/namespaces/{namespace}/pods"
+                  list_statefulsets: "/api/v1/namespaces/{namespace}/statefulsets"
+                  scale_statefulset: "/api/v1/namespaces/{namespace}/statefulsets/{statefulset}/scale"
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health Check
+      description: Verifica se a aplicação está funcionando
+      operationId: getHealth
+      responses:
+        '200':
+          description: Aplicação saudável
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "healthy"
+                timestamp: "2025-09-26T20:51:39.711349-03:00"
+                uptime: "18.863329083s"
+                version: "1.0.0"
+
+  /ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness Check
+      description: Verifica se a aplicação está pronta (dependências funcionando)
+      operationId: getReadiness
+      responses:
+        '200':
+          description: Aplicação pronta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+              example:
+                status: "ready"
+                checks:
+                  database: "healthy"
+                  kubernetes: "healthy"
+                timestamp: "2025-09-26T20:51:49.288825-03:00"
+        '503':
+          description: Aplicação não está pronta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+              example:
+                status: "not ready"
+                checks:
+                  database: "unhealthy"
+                  kubernetes: "healthy"
+
+  /info:
+    get:
+      tags:
+        - Health
+      summary: System Info
+      description: Retorna informações detalhadas do sistema
+      operationId: getInfo
+      responses:
+        '200':
+          description: Informações do sistema
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InfoResponse'
+
+  /metrics:
+    get:
+      tags:
+        - Health
+      summary: Prometheus Metrics
+      description: Retorna métricas no formato Prometheus
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Métricas Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP database_connections_open Number of open connections
+                # TYPE database_connections_open gauge
+                database_connections_open 1
+
+                # HELP app_uptime_seconds Application uptime in seconds
+                # TYPE app_uptime_seconds gauge
+                app_uptime_seconds 57.9681595
+
+  /namespaces/{namespace}/pods:
+    get:
+      tags:
+        - Pods
+      summary: Listar Pods
+      description: Lista todos os pods de um namespace
+      operationId: listPods
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/UserHeader'
+      responses:
+        '200':
+          description: Lista de pods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodListResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /namespaces/{namespace}/pods/{pod}:
+    get:
+      tags:
+        - Pods
+      summary: Obter Pod
+      description: Retorna detalhes de um pod específico
+      operationId: getPod
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/PodParam'
+        - $ref: '#/components/parameters/UserHeader'
+      responses:
+        '200':
+          description: Detalhes do pod
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodInfo'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Pods
+      summary: Deletar Pod
+      description: Deleta um pod específico
+      operationId: deletePod
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/PodParam'
+        - $ref: '#/components/parameters/UserHeader'
+      responses:
+        '200':
+          description: Pod deletado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResponse'
+              example:
+                message: "Pod deleted successfully"
+                pod: "my-app-123"
+                namespace: "default"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /namespaces/{namespace}/pods/{pod}/restart:
+    post:
+      tags:
+        - Pods
+      summary: Reiniciar Pod
+      description: |
+        Reinicia um pod. Para Deployments/StatefulSets faz rollout restart.
+        Para DaemonSets/pods sem controller deleta o pod para recriação.
+      operationId: restartPod
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/PodParam'
+        - $ref: '#/components/parameters/UserHeader'
+      responses:
+        '200':
+          description: Pod reiniciado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestartResponse'
+              examples:
+                deployment:
+                  summary: Restart de Deployment
+                  value:
+                    message: "Rollout restart initiated"
+                    type: "deployment"
+                    deployment: "my-app"
+                    pod: "my-app-123"
+                    namespace: "default"
+                statefulset:
+                  summary: Restart de StatefulSet
+                  value:
+                    message: "Rollout restart initiated"
+                    type: "statefulset"
+                    statefulset: "my-db"
+                    pod: "my-db-0"
+                    namespace: "default"
+                standalone:
+                  summary: Pod sem controller
+                  value:
+                    message: "Pod deleted (no controller)"
+                    warning: "Pod will not be automatically recreated"
+                    pod: "standalone-pod"
+                    namespace: "default"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /namespaces/watch:
+    get:
+      tags:
+        - WebSocket
+      summary: WebSocket para Monitoramento Live
+      description: |
+        Endpoint WebSocket para monitoramento live de pods em um namespace.
+
+        **Fluxo de Conexão:**
+        1. Conecte ao WebSocket endpoint
+        2. Envie configuração JSON: `{"namespace": "default", "user": "admin"}`
+        3. Receba lista inicial de pods
+        4. Receba eventos em tempo real de mudanças nos pods
+
+        **Tipos de Mensagem:**
+        - `connection`: Confirmação de conexão inicial
+        - `initial`: Lista inicial de pods do namespace
+        - `event`: Eventos de mudança em tempo real (ADDED, MODIFIED, DELETED)
+        - `heartbeat`: Verificação de saúde da conexão (a cada 30s)
+        - `error`: Mensagens de erro
+
+        **Formato das Mensagens:**
+        ```json
+        {
+          "type": "event",
+          "data": {
+            "type": "MODIFIED",
+            "pod": { /* PodInfo object */ },
+            "reason": "reason for change"
+          },
+          "timestamp": "2025-09-26T21:00:00Z"
+        }
+        ```
+      operationId: watchPodsWebSocket
+      parameters:
+        - name: namespace
+          in: query
+          required: false
+          description: Namespace para monitorar (também pode ser enviado na primeira mensagem)
+          schema:
+            type: string
+            default: "default"
+            example: "default"
+      responses:
+        '101':
+          description: WebSocket connection established
+        '200':
+          description: Informações de uso do WebSocket (quando não é upgrade)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebSocketUsageInfo'
+              example:
+                message: "WebSocket endpoint for live pod monitoring"
+                usage:
+                  endpoint: "/api/v1/namespaces/watch"
+                  protocol: "WebSocket"
+                  parameters:
+                    namespace: "Kubernetes namespace to monitor (query param or in first message)"
+                  example_url: "/api/v1/namespaces/watch?namespace=default"
+                  flow:
+                    - "1. Connect to WebSocket endpoint"
+                    - "2. Send JSON: {\"namespace\": \"your-namespace\", \"user\": \"your-user\"}"
+                    - "3. Receive initial pod list"
+                    - "4. Receive real-time pod events"
+                  message_types:
+                    connection: "Initial connection confirmation"
+                    initial: "Initial pod list for namespace"
+                    event: "Real-time pod change events"
+                    heartbeat: "Periodic connection health check"
+                    error: "Error messages"
+        '400':
+          description: Invalid WebSocket request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /namespaces/{namespace}/deployments:
+    get:
+      tags:
+        - Deployments
+      summary: Listar Deployments
+      description: Lista todos os deployments de um namespace
+      operationId: listDeployments
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/UserHeader'
+      responses:
+        '200':
+          description: Lista de deployments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentListResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /namespaces:
+    get:
+      tags:
+        - Namespaces
+      summary: Listar Namespaces
+      description: Lista todos os namespaces disponíveis no cluster
+      operationId: listNamespaces
+      parameters:
+        - $ref: '#/components/parameters/UserHeader'
+      responses:
+        '200':
+          description: Lista de namespaces
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceListResponse'
+              example:
+                count: 4
+                namespaces:
+                  - name: "default"
+                    status: "Active"
+                    age: "30d"
+                    labels:
+                      kubernetes.io/metadata.name: "default"
+                  - name: "kube-system"
+                    status: "Active"
+                    age: "30d"
+                    labels:
+                      kubernetes.io/metadata.name: "kube-system"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /namespaces/{namespace}/deployments/{deployment}/scale:
+    post:
+      tags:
+        - Deployments
+      summary: Escalar Deployment
+      description: |
+        Escala um deployment para o número especificado de réplicas.
+        Use 0 para "parar" e N>0 para "iniciar/escalar".
+      operationId: scaleDeployment
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/DeploymentParam'
+        - $ref: '#/components/parameters/UserHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScaleRequest'
+            examples:
+              stop:
+                summary: Parar deployment (0 réplicas)
+                value:
+                  replicas: 0
+              start:
+                summary: Iniciar deployment (3 réplicas)
+                value:
+                  replicas: 3
+              scale:
+                summary: Escalar deployment (5 réplicas)
+                value:
+                  replicas: 5
+      responses:
+        '200':
+          description: Deployment escalado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScaleResponse'
+              examples:
+                stop:
+                  summary: Deployment parado
+                  value:
+                    message: "Deployment scaled successfully"
+                    deployment: "my-app"
+                    namespace: "default"
+                    previous_replicas: 3
+                    new_replicas: 0
+                    action: "Stopping deployment"
+                scale:
+                  summary: Deployment escalado
+                  value:
+                    message: "Deployment scaled successfully"
+                    deployment: "my-app"
+                    namespace: "default"
+                    previous_replicas: 3
+                    new_replicas: 5
+                    action: "Scaling from 3 to 5 replicas"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /namespaces/{namespace}/statefulsets:
+    get:
+      tags:
+        - StatefulSets
+      summary: Listar StatefulSets
+      description: Lista todos os statefulsets de um namespace
+      operationId: listStatefulSets
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/UserHeader'
+      responses:
+        '200':
+          description: Lista de statefulsets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatefulSetListResponse'
+              example:
+                namespace: "default"
+                count: 2
+                statefulsets:
+                  - name: "mysql"
+                    namespace: "default"
+                    replicas: 3
+                    ready_replicas: 3
+                    current_replicas: 3
+                    updated_replicas: 3
+                    labels:
+                      app: "mysql"
+                    created_at: "2025-09-26T20:00:00Z"
+                  - name: "redis"
+                    namespace: "default"
+                    replicas: 1
+                    ready_replicas: 1
+                    current_replicas: 1
+                    updated_replicas: 1
+                    labels:
+                      app: "redis"
+                    created_at: "2025-09-26T21:00:00Z"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /namespaces/{namespace}/statefulsets/{statefulset}/scale:
+    post:
+      tags:
+        - StatefulSets
+      summary: Escalar StatefulSet
+      description: |
+        Escala um statefulset para o número especificado de réplicas.
+        Use 0 para "parar" e N>0 para "iniciar/escalar".
+      operationId: scaleStatefulSet
+      parameters:
+        - $ref: '#/components/parameters/NamespaceParam'
+        - $ref: '#/components/parameters/StatefulSetParam'
+        - $ref: '#/components/parameters/UserHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScaleRequest'
+            examples:
+              stop:
+                summary: Parar statefulset (0 réplicas)
+                value:
+                  replicas: 0
+              start:
+                summary: Iniciar statefulset (3 réplicas)
+                value:
+                  replicas: 3
+              scale:
+                summary: Escalar statefulset (5 réplicas)
+                value:
+                  replicas: 5
+      responses:
+        '200':
+          description: StatefulSet escalado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatefulSetScaleResponse'
+              examples:
+                stop:
+                  summary: StatefulSet parado
+                  value:
+                    message: "StatefulSet scaled successfully"
+                    statefulset: "mysql"
+                    namespace: "default"
+                    previous_replicas: 3
+                    new_replicas: 0
+                    action: "Stopping statefulset"
+                scale:
+                  summary: StatefulSet escalado
+                  value:
+                    message: "StatefulSet scaled successfully"
+                    statefulset: "mysql"
+                    namespace: "default"
+                    previous_replicas: 3
+                    new_replicas: 5
+                    action: "Scaling from 3 to 5 replicas"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API Key para autenticação
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token JWT para autenticação
+
+  parameters:
+    NamespaceParam:
+      name: namespace
+      in: path
+      required: true
+      description: Nome do namespace Kubernetes
+      schema:
+        type: string
+        example: "default"
+        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+
+    PodParam:
+      name: pod
+      in: path
+      required: true
+      description: Nome do pod
+      schema:
+        type: string
+        example: "my-app-7d4b8c9f5-xyz12"
+        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+
+    DeploymentParam:
+      name: deployment
+      in: path
+      required: true
+      description: Nome do deployment
+      schema:
+        type: string
+        example: "my-app"
+        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+
+    StatefulSetParam:
+      name: statefulset
+      in: path
+      required: true
+      description: Nome do statefulset
+      schema:
+        type: string
+        example: "mysql"
+        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+
+    UserHeader:
+      name: X-User
+      in: header
+      required: false
+      description: Usuário executando a operação (para auditoria)
+      schema:
+        type: string
+        example: "admin@company.com"
+        default: "system"
+
+  responses:
+    BadRequest:
+      description: Requisição inválida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "replicas field is required"
+            code: 400
+            path: "/api/v1/namespaces/default/deployments/my-app/scale"
+            method: "POST"
+
+    NotFound:
+      description: Recurso não encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "pod not found"
+            code: 404
+            path: "/api/v1/namespaces/default/pods/non-existent"
+            method: "GET"
+
+    InternalServerError:
+      description: Erro interno do servidor
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "failed to connect to kubernetes cluster"
+            code: 500
+            path: "/api/v1/namespaces/default/pods"
+            method: "GET"
+
+  schemas:
+    ApiInfo:
+      type: object
+      properties:
+        service:
+          type: string
+          example: "K8s Pod Manager API"
+        version:
+          type: string
+          example: "1.0.0"
+        endpoints:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            health: "/api/v1/health"
+            list_namespaces: "/api/v1/namespaces"
+            watch_pods: "/api/v1/namespaces/watch"
+            list_pods: "/api/v1/namespaces/{namespace}/pods"
+            list_statefulsets: "/api/v1/namespaces/{namespace}/statefulsets"
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: string
+          description: Tempo de atividade da aplicação
+        version:
+          type: string
+
+    ReadinessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, not ready]
+        checks:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [healthy, unhealthy, not initialized]
+            kubernetes:
+              type: string
+              enum: [healthy, unhealthy, not initialized]
+        timestamp:
+          type: string
+          format: date-time
+
+    InfoResponse:
+      type: object
+      properties:
+        service:
+          type: object
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+            uptime:
+              type: string
+        kubernetes:
+          type: object
+          properties:
+            version:
+              type: string
+            platform:
+              type: string
+        database:
+          type: object
+          properties:
+            open_connections:
+              type: integer
+            in_use:
+              type: integer
+            idle:
+              type: integer
+        timestamp:
+          type: string
+          format: date-time
+
+    PodInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "my-app-7d4b8c9f5-xyz12"
+        namespace:
+          type: string
+          example: "default"
+        phase:
+          type: string
+          enum: [Pending, Running, Succeeded, Failed, Unknown]
+          example: "Running"
+        pod_ip:
+          type: string
+          example: "10.244.0.10"
+        host_ip:
+          type: string
+          example: "192.168.1.100"
+        node_name:
+          type: string
+          example: "worker-node-1"
+        age:
+          type: string
+          description: Idade do pod (formato humanizado)
+          example: "2h30m"
+        ready:
+          type: string
+          description: Containers prontos/total
+          example: "1/1"
+        restarts:
+          type: integer
+          description: Número total de restarts
+          example: 0
+        owners:
+          type: array
+          items:
+            type: string
+          description: Controllers que gerenciam este pod
+          example: ["ReplicaSet/my-app-7d4b8c9f5"]
+        containers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContainerInfo'
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            app: "my-app"
+            version: "v1.0.0"
+
+    ContainerInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "my-app"
+        image:
+          type: string
+          example: "my-app:1.0.0"
+        ready:
+          type: boolean
+          example: true
+        restart_count:
+          type: integer
+          example: 0
+        state:
+          type: string
+          description: Estado atual do container
+          example: "Running"
+
+    PodListResponse:
+      type: object
+      properties:
+        namespace:
+          type: string
+          example: "default"
+        count:
+          type: integer
+          example: 5
+        pods:
+          type: array
+          items:
+            $ref: '#/components/schemas/PodInfo'
+
+    DeploymentInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "my-app"
+        namespace:
+          type: string
+          example: "default"
+        replicas:
+          type: integer
+          description: Número desejado de réplicas
+          example: 3
+        updated_replicas:
+          type: integer
+          description: Réplicas atualizadas
+          example: 3
+        ready_replicas:
+          type: integer
+          description: Réplicas prontas
+          example: 3
+        available_replicas:
+          type: integer
+          description: Réplicas disponíveis
+          example: 3
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DeploymentListResponse:
+      type: object
+      properties:
+        namespace:
+          type: string
+          example: "default"
+        count:
+          type: integer
+          example: 2
+        deployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentInfo'
+
+    NamespaceInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "default"
+        status:
+          type: string
+          enum: [Active, Terminating]
+          example: "Active"
+        age:
+          type: string
+          description: Idade do namespace (formato humanizado)
+          example: "30d"
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            kubernetes.io/metadata.name: "default"
+        annotations:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            kubectl.kubernetes.io/last-applied-configuration: "{...}"
+
+    StatefulSetInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "mysql"
+        namespace:
+          type: string
+          example: "default"
+        replicas:
+          type: integer
+          description: Número desejado de réplicas
+          example: 3
+        ready_replicas:
+          type: integer
+          description: Réplicas prontas
+          example: 3
+        current_replicas:
+          type: integer
+          description: Réplicas atuais
+          example: 3
+        updated_replicas:
+          type: integer
+          description: Réplicas atualizadas
+          example: 3
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            app: "mysql"
+            version: "8.0"
+        created_at:
+          type: string
+          format: date-time
+          example: "2025-09-26T20:00:00Z"
+
+    StatefulSetListResponse:
+      type: object
+      properties:
+        namespace:
+          type: string
+          example: "default"
+        count:
+          type: integer
+          example: 2
+        statefulsets:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatefulSetInfo'
+
+    NamespaceListResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+          example: 4
+        namespaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamespaceInfo'
+
+    ScaleRequest:
+      type: object
+      required:
+        - replicas
+      properties:
+        replicas:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Número de réplicas desejado
+          example: 3
+
+    RestartResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Rollout restart initiated"
+        type:
+          type: string
+          enum: [deployment, statefulset, daemonset, standalone]
+          example: "deployment"
+        deployment:
+          type: string
+          description: Nome do deployment (se aplicável)
+          example: "my-app"
+        statefulset:
+          type: string
+          description: Nome do statefulset (se aplicável)
+        controller:
+          type: string
+          description: Nome do controller (para DaemonSet/outros)
+        pod:
+          type: string
+          example: "my-app-7d4b8c9f5-xyz12"
+        namespace:
+          type: string
+          example: "default"
+        warning:
+          type: string
+          description: Aviso sobre pods sem controller
+          example: "Pod will not be automatically recreated"
+
+    ScaleResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Deployment scaled successfully"
+        deployment:
+          type: string
+          example: "my-app"
+        namespace:
+          type: string
+          example: "default"
+        previous_replicas:
+          type: integer
+          example: 3
+        new_replicas:
+          type: integer
+          example: 5
+        action:
+          type: string
+          description: Descrição da ação realizada
+          example: "Scaling from 3 to 5 replicas"
+
+    StatefulSetScaleResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "StatefulSet scaled successfully"
+        statefulset:
+          type: string
+          example: "mysql"
+        namespace:
+          type: string
+          example: "default"
+        previous_replicas:
+          type: integer
+          example: 3
+        new_replicas:
+          type: integer
+          example: 5
+        action:
+          type: string
+          description: Descrição da ação realizada
+          example: "Scaling from 3 to 5 replicas"
+
+    OperationResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Operation completed successfully"
+        pod:
+          type: string
+          example: "my-app-7d4b8c9f5-xyz12"
+        namespace:
+          type: string
+          example: "default"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Mensagem de erro
+          example: "Resource not found"
+        code:
+          type: integer
+          description: Código HTTP do erro
+          example: 404
+        path:
+          type: string
+          description: Path da requisição que gerou o erro
+          example: "/api/v1/namespaces/default/pods/non-existent"
+        method:
+          type: string
+          description: Método HTTP usado
+          example: "GET"
+        request_id:
+          type: string
+          description: ID único da requisição
+          example: "req-123-abc-456"
+
+    WebSocketUsageInfo:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "WebSocket endpoint for live pod monitoring"
+        usage:
+          type: object
+          properties:
+            endpoint:
+              type: string
+              example: "/api/v1/namespaces/watch"
+            protocol:
+              type: string
+              example: "WebSocket"
+            parameters:
+              type: object
+              additionalProperties:
+                type: string
+            example_url:
+              type: string
+              example: "/api/v1/namespaces/watch?namespace=default"
+            flow:
+              type: array
+              items:
+                type: string
+            message_types:
+              type: object
+              additionalProperties:
+                type: string
+
+    WebSocketMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [connection, initial, event, heartbeat, error]
+          description: Tipo da mensagem WebSocket
+          example: "event"
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/ConnectionInfo'
+            - $ref: '#/components/schemas/InitialPodData'
+            - $ref: '#/components/schemas/PodWatchEvent'
+            - $ref: '#/components/schemas/HeartbeatData'
+          description: Dados da mensagem (varia conforme o tipo)
+        error:
+          type: string
+          description: Mensagem de erro (apenas para tipo 'error')
+          example: "Invalid namespace format"
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp da mensagem
+          example: "2025-09-26T21:00:00Z"
+
+    ConnectionInfo:
+      type: object
+      description: Dados da mensagem de conexão inicial
+      properties:
+        connected:
+          type: boolean
+          example: true
+        start_time:
+          type: string
+          format: date-time
+          example: "2025-09-26T21:00:00Z"
+        message:
+          type: string
+          example: "WebSocket connected. Send namespace to start monitoring."
+        user:
+          type: string
+          example: "admin"
+
+    InitialPodData:
+      type: object
+      description: Dados da lista inicial de pods
+      properties:
+        namespace:
+          type: string
+          example: "default"
+        count:
+          type: integer
+          example: 5
+        pods:
+          type: array
+          items:
+            $ref: '#/components/schemas/PodInfo'
+
+    PodWatchEvent:
+      type: object
+      description: Evento de mudança de pod
+      properties:
+        type:
+          type: string
+          enum: [ADDED, MODIFIED, DELETED]
+          description: Tipo do evento Kubernetes
+          example: "MODIFIED"
+        pod:
+          $ref: '#/components/schemas/PodInfo'
+        reason:
+          type: string
+          description: Razão da mudança (quando disponível)
+          example: "FailedScheduling"
+
+    HeartbeatData:
+      type: object
+      description: Dados do heartbeat
+      properties:
+        namespace:
+          type: string
+          example: "default"
+        status:
+          type: string
+          example: "watching"
+        user:
+          type: string
+          example: "admin"
+
+    WatchRequest:
+      type: object
+      description: Configuração inicial enviada para o WebSocket
+      required:
+        - namespace
+      properties:
+        namespace:
+          type: string
+          description: Namespace para monitorar
+          example: "default"
+          pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+        user:
+          type: string
+          description: Usuário executando o monitoramento (para auditoria)
+          example: "admin@company.com"
+
+tags:
+  - name: System
+    description: Informações gerais da API
+  - name: Health
+    description: Health checks e métricas do sistema
+  - name: Namespaces
+    description: Operações com namespaces Kubernetes
+  - name: Pods
+    description: Operações com pods Kubernetes
+  - name: Deployments
+    description: Operações com deployments Kubernetes
+  - name: WebSocket
+    description: Monitoramento live via WebSocket
