@@ -518,6 +518,65 @@ func (r *subscriptionResolver) WatchAllPods(ctx context.Context) (<-chan *model.
 	return eventsChan, nil
 }
 
+// StreamPodLogs is the resolver for the streamPodLogs field.
+// Streams pod logs in real-time via GraphQL subscription
+func (r *subscriptionResolver) StreamPodLogs(ctx context.Context, namespace string, name string, user *string) (<-chan *model.PodLogLine, error) {
+	// Input validation
+	if err := r.getValidator().ValidateNamespace(namespace); err != nil {
+		r.getAuditLogger().LogSubscription(ctx, "streamPodLogs", namespace, false)
+		return nil, r.getErrorHandler().HandleValidationError(err, "namespace")
+	}
+
+	if err := r.getValidator().ValidatePodName(name); err != nil {
+		r.getAuditLogger().LogSubscription(ctx, "streamPodLogs", namespace, false)
+		return nil, r.getErrorHandler().HandleValidationError(err, "name")
+	}
+
+	// Build log stream options with sensible defaults
+	tailLines := int64(100)
+	opts := &services.LogStreamOptions{
+		Follow:     true,       // Always follow for streaming
+		Timestamps: true,       // Include timestamps
+		TailLines:  &tailLines, // Last 100 lines
+	}
+
+	// Log subscription start
+	r.getAuditLogger().LogSubscription(ctx, "streamPodLogs", namespace+"/"+name, true)
+
+	logsChan := make(chan *model.PodLogLine, 100)
+	serviceChan := make(chan services.PodLogLine, 100)
+
+	// Start the log streamer in a goroutine
+	go func() {
+		defer func() {
+			close(logsChan)
+			r.getAuditLogger().LogSubscription(ctx, "streamPodLogs", namespace+"/"+name, false)
+		}()
+
+		if err := r.getPodService().StreamLogs(ctx, namespace, name, opts, serviceChan); err != nil {
+			// Log error but don't return it through channel
+			// In a production environment, you might want to send error events
+			return
+		}
+	}()
+
+	// Convert service log lines to GraphQL log lines
+	go func() {
+		defer close(serviceChan)
+		for logLine := range serviceChan {
+			graphqlLogLine := r.getConverter().ConvertPodLogLine(logLine)
+
+			select {
+			case logsChan <- graphqlLogLine:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return logsChan, nil
+}
+
 // Mutation returns MutationResolver implementation.
 func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
 

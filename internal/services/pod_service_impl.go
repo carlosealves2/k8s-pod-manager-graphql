@@ -1,8 +1,10 @@
 package services
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/carlosf/k8s-pod-manager/internal/kubernetes"
@@ -345,4 +347,112 @@ func (s *podServiceImpl) extractEventDetails(pod corev1.Pod) (reason, message st
 	}
 
 	return "", ""
+}
+
+// StreamLogs implements PodService for streaming pod logs
+func (s *podServiceImpl) StreamLogs(ctx context.Context, namespace, podName string, opts *LogStreamOptions, logsChan chan<- PodLogLine) error {
+	// Validate input parameters
+	if namespace == "" {
+		return NewValidationError("namespace is required", nil)
+	}
+	if podName == "" {
+		return NewValidationError("pod name is required", nil)
+	}
+
+	// Verify pod exists and get container info
+	pod, err := s.client.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return NewNotFoundError("pod", fmt.Sprintf("%s/%s", namespace, podName))
+	}
+
+	// Determine container to stream logs from
+	containerName := opts.Container
+	if containerName == "" {
+		// If no container specified and pod has multiple containers, use first one
+		if len(pod.Spec.Containers) == 0 {
+			return NewValidationError("pod has no containers", nil)
+		}
+		containerName = pod.Spec.Containers[0].Name
+	}
+
+	// Validate container exists in pod
+	containerExists := false
+	for _, container := range pod.Spec.Containers {
+		if container.Name == containerName {
+			containerExists = true
+			break
+		}
+	}
+	if !containerExists {
+		return NewValidationError(
+			fmt.Sprintf("container '%s' not found in pod", containerName),
+			nil,
+		)
+	}
+
+	// Build log options
+	logOpts := &corev1.PodLogOptions{
+		Container:  containerName,
+		Follow:     opts.Follow,
+		Timestamps: opts.Timestamps,
+	}
+
+	if opts.TailLines != nil {
+		logOpts.TailLines = opts.TailLines
+	}
+
+	if opts.SinceSeconds != nil {
+		logOpts.SinceSeconds = opts.SinceSeconds
+	}
+
+	// Get log stream from Kubernetes API
+	req := s.client.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return NewInternalError(
+			fmt.Sprintf("failed to open log stream for pod %s/%s", namespace, podName),
+			err,
+		)
+	}
+	defer stream.Close()
+
+	// Stream logs line by line
+	return s.streamLogsFromReader(ctx, stream, containerName, logsChan)
+}
+
+// streamLogsFromReader reads logs from io.ReadCloser and sends to channel
+func (s *podServiceImpl) streamLogsFromReader(ctx context.Context, reader io.ReadCloser, containerName string, logsChan chan<- PodLogLine) error {
+	scanner := bufio.NewScanner(reader)
+
+	// Set a reasonable buffer size for long log lines (1MB)
+	const maxScanTokenSize = 1024 * 1024
+	buf := make([]byte, maxScanTokenSize)
+	scanner.Buffer(buf, maxScanTokenSize)
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			line := scanner.Text()
+
+			logLine := PodLogLine{
+				Timestamp: time.Now(),
+				Line:      line,
+				Container: containerName,
+			}
+
+			select {
+			case logsChan <- logLine:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return NewInternalError("error reading log stream", err)
+	}
+
+	return nil
 }

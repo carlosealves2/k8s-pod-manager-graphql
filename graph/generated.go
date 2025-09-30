@@ -11,11 +11,11 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
 	"github.com/carlosf/k8s-pod-manager/graph/model"
+	"github.com/carlosf/k8s-pod-manager/graph/scalar"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -157,6 +157,12 @@ type ComplexityRoot struct {
 		Pods      func(childComplexity int) int
 	}
 
+	PodLogLine struct {
+		Container func(childComplexity int) int
+		Line      func(childComplexity int) int
+		Timestamp func(childComplexity int) int
+	}
+
 	PodWatchEvent struct {
 		Pod    func(childComplexity int) int
 		Reason func(childComplexity int) int
@@ -225,8 +231,9 @@ type ComplexityRoot struct {
 	}
 
 	Subscription struct {
-		WatchAllPods func(childComplexity int) int
-		WatchPods    func(childComplexity int, namespace string) int
+		StreamPodLogs func(childComplexity int, namespace string, name string, user *string) int
+		WatchAllPods  func(childComplexity int) int
+		WatchPods     func(childComplexity int, namespace string) int
 	}
 
 	SystemInfo struct {
@@ -256,6 +263,7 @@ type QueryResolver interface {
 type SubscriptionResolver interface {
 	WatchPods(ctx context.Context, namespace string) (<-chan *model.PodWatchEvent, error)
 	WatchAllPods(ctx context.Context) (<-chan *model.PodWatchEvent, error)
+	StreamPodLogs(ctx context.Context, namespace string, name string, user *string) (<-chan *model.PodLogLine, error)
 }
 
 type executableSchema struct {
@@ -690,6 +698,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.PodListResponse.Pods(childComplexity), true
 
+	case "PodLogLine.container":
+		if e.complexity.PodLogLine.Container == nil {
+			break
+		}
+
+		return e.complexity.PodLogLine.Container(childComplexity), true
+	case "PodLogLine.line":
+		if e.complexity.PodLogLine.Line == nil {
+			break
+		}
+
+		return e.complexity.PodLogLine.Line(childComplexity), true
+	case "PodLogLine.timestamp":
+		if e.complexity.PodLogLine.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.PodLogLine.Timestamp(childComplexity), true
+
 	case "PodWatchEvent.pod":
 		if e.complexity.PodWatchEvent.Pod == nil {
 			break
@@ -981,6 +1008,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StatefulSetListResponse.Statefulsets(childComplexity), true
 
+	case "Subscription.streamPodLogs":
+		if e.complexity.Subscription.StreamPodLogs == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_streamPodLogs_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Subscription.StreamPodLogs(childComplexity, args["namespace"].(string), args["name"].(string), args["user"].(*string)), true
 	case "Subscription.watchAllPods":
 		if e.complexity.Subscription.WatchAllPods == nil {
 			break
@@ -1322,6 +1360,27 @@ func (ec *executionContext) field_Query_statefulsets_args(ctx context.Context, r
 		return nil, err
 	}
 	args["namespace"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_streamPodLogs_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "namespace", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["namespace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "user", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["user"] = arg2
 	return args, nil
 }
 
@@ -2012,7 +2071,7 @@ func (ec *executionContext) _DeploymentInfo_createdAt(ctx context.Context, field
 			return obj.CreatedAt, nil
 		},
 		nil,
-		ec.marshalNTime2timeᚐTime,
+		ec.marshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime,
 		true,
 		true,
 	)
@@ -2175,7 +2234,7 @@ func (ec *executionContext) _HealthResponse_timestamp(ctx context.Context, field
 			return obj.Timestamp, nil
 		},
 		nil,
-		ec.marshalNTime2timeᚐTime,
+		ec.marshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime,
 		true,
 		true,
 	)
@@ -2371,7 +2430,7 @@ func (ec *executionContext) _InfoResponse_timestamp(ctx context.Context, field g
 			return obj.Timestamp, nil
 		},
 		nil,
-		ec.marshalNTime2timeᚐTime,
+		ec.marshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime,
 		true,
 		true,
 	)
@@ -3465,6 +3524,93 @@ func (ec *executionContext) fieldContext_PodListResponse_pods(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _PodLogLine_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.PodLogLine) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PodLogLine_timestamp,
+		func(ctx context.Context) (any, error) {
+			return obj.Timestamp, nil
+		},
+		nil,
+		ec.marshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PodLogLine_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PodLogLine",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PodLogLine_line(ctx context.Context, field graphql.CollectedField, obj *model.PodLogLine) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PodLogLine_line,
+		func(ctx context.Context) (any, error) {
+			return obj.Line, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PodLogLine_line(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PodLogLine",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PodLogLine_container(ctx context.Context, field graphql.CollectedField, obj *model.PodLogLine) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PodLogLine_container,
+		func(ctx context.Context) (any, error) {
+			return obj.Container, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_PodLogLine_container(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PodLogLine",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _PodWatchEvent_type(ctx context.Context, field graphql.CollectedField, obj *model.PodWatchEvent) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -4233,7 +4379,7 @@ func (ec *executionContext) _ReadinessResponse_timestamp(ctx context.Context, fi
 			return obj.Timestamp, nil
 		},
 		nil,
-		ec.marshalNTime2timeᚐTime,
+		ec.marshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime,
 		true,
 		true,
 	)
@@ -4906,7 +5052,7 @@ func (ec *executionContext) _StatefulSetInfo_createdAt(ctx context.Context, fiel
 			return obj.CreatedAt, nil
 		},
 		nil,
-		ec.marshalNTime2timeᚐTime,
+		ec.marshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime,
 		true,
 		true,
 	)
@@ -5112,6 +5258,55 @@ func (ec *executionContext) fieldContext_Subscription_watchAllPods(_ context.Con
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PodWatchEvent", field.Name)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_streamPodLogs(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Subscription_streamPodLogs,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.resolvers.Subscription().StreamPodLogs(ctx, fc.Args["namespace"].(string), fc.Args["name"].(string), fc.Args["user"].(*string))
+		},
+		nil,
+		ec.marshalNPodLogLine2ᚖgithubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋmodelᚐPodLogLine,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Subscription_streamPodLogs(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_PodLogLine_timestamp(ctx, field)
+			case "line":
+				return ec.fieldContext_PodLogLine_line(ctx, field)
+			case "container":
+				return ec.fieldContext_PodLogLine_container(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PodLogLine", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_streamPodLogs_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -7516,6 +7711,52 @@ func (ec *executionContext) _PodListResponse(ctx context.Context, sel ast.Select
 	return out
 }
 
+var podLogLineImplementors = []string{"PodLogLine"}
+
+func (ec *executionContext) _PodLogLine(ctx context.Context, sel ast.SelectionSet, obj *model.PodLogLine) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, podLogLineImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PodLogLine")
+		case "timestamp":
+			out.Values[i] = ec._PodLogLine_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "line":
+			out.Values[i] = ec._PodLogLine_line(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "container":
+			out.Values[i] = ec._PodLogLine_container(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var podWatchEventImplementors = []string{"PodWatchEvent"}
 
 func (ec *executionContext) _PodWatchEvent(ctx context.Context, sel ast.SelectionSet, obj *model.PodWatchEvent) graphql.Marshaler {
@@ -8168,6 +8409,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_watchPods(ctx, fields[0])
 	case "watchAllPods":
 		return ec._Subscription_watchAllPods(ctx, fields[0])
+	case "streamPodLogs":
+		return ec._Subscription_streamPodLogs(ctx, fields[0])
 	default:
 		panic("unknown field " + strconv.Quote(fields[0].Name))
 	}
@@ -8981,6 +9224,20 @@ func (ec *executionContext) marshalNPodListResponse2ᚖgithubᚗcomᚋcarlosfᚋ
 	return ec._PodListResponse(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNPodLogLine2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋmodelᚐPodLogLine(ctx context.Context, sel ast.SelectionSet, v model.PodLogLine) graphql.Marshaler {
+	return ec._PodLogLine(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPodLogLine2ᚖgithubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋmodelᚐPodLogLine(ctx context.Context, sel ast.SelectionSet, v *model.PodLogLine) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._PodLogLine(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNPodWatchEvent2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋmodelᚐPodWatchEvent(ctx context.Context, sel ast.SelectionSet, v model.PodWatchEvent) graphql.Marshaler {
 	return ec._PodWatchEvent(ctx, sel, &v)
 }
@@ -9176,20 +9433,14 @@ func (ec *executionContext) marshalNSystemInfo2ᚖgithubᚗcomᚋcarlosfᚋk8s�
 	return ec._SystemInfo(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNTime2timeᚐTime(ctx context.Context, v any) (time.Time, error) {
-	res, err := graphql.UnmarshalTime(v)
+func (ec *executionContext) unmarshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime(ctx context.Context, v any) (scalar.Time, error) {
+	var res scalar.Time
+	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTime2timeᚐTime(ctx context.Context, sel ast.SelectionSet, v time.Time) graphql.Marshaler {
-	_ = sel
-	res := graphql.MarshalTime(v)
-	if res == graphql.Null {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-	}
-	return res
+func (ec *executionContext) marshalNTime2githubᚗcomᚋcarlosfᚋk8sᚑpodᚑmanagerᚋgraphᚋscalarᚐTime(ctx context.Context, sel ast.SelectionSet, v scalar.Time) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalN__Directive2githubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐDirective(ctx context.Context, sel ast.SelectionSet, v introspection.Directive) graphql.Marshaler {

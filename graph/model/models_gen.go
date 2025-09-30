@@ -3,7 +3,7 @@
 package model
 
 import (
-	"time"
+	"github.com/carlosf/k8s-pod-manager/graph/scalar"
 )
 
 type AllPodsResponse struct {
@@ -39,7 +39,7 @@ type DeploymentInfo struct {
 	ReadyReplicas     int         `json:"readyReplicas"`
 	AvailableReplicas int         `json:"availableReplicas"`
 	Labels            []*KeyValue `json:"labels"`
-	CreatedAt         time.Time   `json:"createdAt"`
+	CreatedAt         scalar.Time `json:"createdAt"`
 }
 
 type DeploymentListResponse struct {
@@ -49,17 +49,17 @@ type DeploymentListResponse struct {
 }
 
 type HealthResponse struct {
-	Status    string    `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-	Uptime    string    `json:"uptime"`
-	Version   string    `json:"version"`
+	Status    string      `json:"status"`
+	Timestamp scalar.Time `json:"timestamp"`
+	Uptime    string      `json:"uptime"`
+	Version   string      `json:"version"`
 }
 
 type InfoResponse struct {
 	Service    *SystemInfo     `json:"service"`
 	Kubernetes *KubernetesInfo `json:"kubernetes"`
 	Database   *DatabaseInfo   `json:"database"`
-	Timestamp  time.Time       `json:"timestamp"`
+	Timestamp  scalar.Time     `json:"timestamp"`
 }
 
 type KeyValue struct {
@@ -110,6 +110,12 @@ type PodListResponse struct {
 	Pods      []*PodInfo `json:"pods"`
 }
 
+type PodLogLine struct {
+	Timestamp scalar.Time `json:"timestamp"`
+	Line      string      `json:"line"`
+	Container *string     `json:"container,omitempty"`
+}
+
 type PodWatchEvent struct {
 	Type   string   `json:"type"`
 	Pod    *PodInfo `json:"pod"`
@@ -127,7 +133,7 @@ type ReadinessCheck struct {
 type ReadinessResponse struct {
 	Status    string          `json:"status"`
 	Checks    *ReadinessCheck `json:"checks"`
-	Timestamp time.Time       `json:"timestamp"`
+	Timestamp scalar.Time     `json:"timestamp"`
 }
 
 type RestartPodResponse struct {
@@ -163,7 +169,7 @@ type StatefulSetInfo struct {
 	CurrentReplicas int         `json:"currentReplicas"`
 	UpdatedReplicas int         `json:"updatedReplicas"`
 	Labels          []*KeyValue `json:"labels"`
-	CreatedAt       time.Time   `json:"createdAt"`
+	CreatedAt       scalar.Time `json:"createdAt"`
 }
 
 type StatefulSetListResponse struct {

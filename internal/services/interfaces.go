@@ -21,6 +21,9 @@ type PodService interface {
 	// Pod watching
 	WatchPods(ctx context.Context, namespace string, opts *WatchOptions, eventsChan chan<- PodWatchEvent) error
 	WatchAllPods(ctx context.Context, opts *WatchOptions, eventsChan chan<- PodWatchEvent) error
+
+	// Pod logs streaming
+	StreamLogs(ctx context.Context, namespace, podName string, opts *LogStreamOptions, logsChan chan<- PodLogLine) error
 }
 
 // DeploymentService defines the interface for deployment-related operations
