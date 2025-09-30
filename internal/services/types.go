@@ -117,8 +117,24 @@ type ListOptions struct {
 
 // WatchOptions represents options for watching resources
 type WatchOptions struct {
-	Namespace     string            `json:"namespace,omitempty"`
-	LabelFilter   map[string]string `json:"label_filter,omitempty"`
-	FieldFilter   map[string]string `json:"field_filter,omitempty"`
-	ResourceVersion string          `json:"resource_version,omitempty"`
+	Namespace       string            `json:"namespace,omitempty"`
+	LabelFilter     map[string]string `json:"label_filter,omitempty"`
+	FieldFilter     map[string]string `json:"field_filter,omitempty"`
+	ResourceVersion string            `json:"resource_version,omitempty"`
+}
+
+// LogStreamOptions represents options for streaming pod logs
+type LogStreamOptions struct {
+	Container    string `json:"container,omitempty"`     // Container name (required for multi-container pods)
+	Follow       bool   `json:"follow"`                  // Follow log stream
+	TailLines    *int64 `json:"tail_lines,omitempty"`    // Number of lines to tail
+	SinceSeconds *int64 `json:"since_seconds,omitempty"` // Show logs since N seconds ago
+	Timestamps   bool   `json:"timestamps"`              // Include timestamps in log lines
+}
+
+// PodLogLine represents a single line from pod logs
+type PodLogLine struct {
+	Timestamp time.Time `json:"timestamp"`
+	Line      string    `json:"line"`
+	Container string    `json:"container,omitempty"`
 }

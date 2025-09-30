@@ -53,3 +53,6 @@ models:
       - github.com/99designs/gqlgen/graphql.Int
       - github.com/99designs/gqlgen/graphql.Int64
       - github.com/99designs/gqlgen/graphql.Int32
+  Time:
+    model:
+      - github.com/carlosf/k8s-pod-manager/graph/scalar.Time

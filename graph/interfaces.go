@@ -32,6 +32,9 @@ type PodServiceInterface interface {
 	// Watch operations
 	WatchPods(ctx context.Context, namespace string, eventsChan chan<- services.PodWatchEvent) error
 	WatchAllPods(ctx context.Context, eventsChan chan<- services.PodWatchEvent) error
+
+	// Log streaming operations
+	StreamLogs(ctx context.Context, namespace, podName string, opts *services.LogStreamOptions, logsChan chan<- services.PodLogLine) error
 }
 
 // HealthServiceInterface defines the contract for health check operations
@@ -59,6 +62,7 @@ type TypeConverter interface {
 	ConvertDeploymentInfo(deployment appsv1.Deployment) *model.DeploymentInfo
 	ConvertStatefulSetInfo(statefulSet appsv1.StatefulSet) *model.StatefulSetInfo
 	ConvertPodWatchEvent(serviceEvent services.PodWatchEvent) *model.PodWatchEvent
+	ConvertPodLogLine(serviceLog services.PodLogLine) *model.PodLogLine
 	MapToKeyValuePairs(m map[string]string) []*model.KeyValue
 }
 

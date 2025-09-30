@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/carlosf/k8s-pod-manager/graph/model"
+	"github.com/carlosf/k8s-pod-manager/graph/scalar"
 	"github.com/carlosf/k8s-pod-manager/internal/database"
 	"github.com/carlosf/k8s-pod-manager/internal/kubernetes"
 )
@@ -27,7 +28,7 @@ func NewDefaultHealthService(version string) *DefaultHealthService {
 func (h *DefaultHealthService) GetHealth() *model.HealthResponse {
 	return &model.HealthResponse{
 		Status:    "healthy",
-		Timestamp: time.Now(),
+		Timestamp: scalar.Time(time.Now()),
 		Uptime:    time.Since(h.startTime).String(),
 		Version:   h.version,
 	}
@@ -74,7 +75,7 @@ func (h *DefaultHealthService) GetReadiness() *model.ReadinessResponse {
 	return &model.ReadinessResponse{
 		Status:    status,
 		Checks:    checks,
-		Timestamp: time.Now(),
+		Timestamp: scalar.Time(time.Now()),
 	}
 }
 
@@ -114,7 +115,7 @@ func (h *DefaultHealthService) GetSystemInfo() *model.InfoResponse {
 			Platform: k8sPlatform,
 		},
 		Database:  &dbStats,
-		Timestamp: time.Now(),
+		Timestamp: scalar.Time(time.Now()),
 	}
 }
 

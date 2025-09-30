@@ -2,6 +2,7 @@ package graph
 
 import (
 	"github.com/carlosf/k8s-pod-manager/graph/model"
+	"github.com/carlosf/k8s-pod-manager/graph/scalar"
 	"github.com/carlosf/k8s-pod-manager/internal/services"
 	appsv1 "k8s.io/api/apps/v1"
 )
@@ -61,7 +62,7 @@ func (c *DefaultTypeConverter) ConvertDeploymentInfo(deployment appsv1.Deploymen
 		ReadyReplicas:     int(deployment.Status.ReadyReplicas),
 		AvailableReplicas: int(deployment.Status.AvailableReplicas),
 		Labels:            c.MapToKeyValuePairs(deployment.Labels),
-		CreatedAt:         deployment.CreationTimestamp.Time,
+		CreatedAt:         scalar.Time(deployment.CreationTimestamp.Time),
 	}
 }
 
@@ -80,7 +81,7 @@ func (c *DefaultTypeConverter) ConvertStatefulSetInfo(statefulSet appsv1.Statefu
 		CurrentReplicas: int(statefulSet.Status.CurrentReplicas),
 		UpdatedReplicas: int(statefulSet.Status.UpdatedReplicas),
 		Labels:          c.MapToKeyValuePairs(statefulSet.Labels),
-		CreatedAt:       statefulSet.CreationTimestamp.Time,
+		CreatedAt:       scalar.Time(statefulSet.CreationTimestamp.Time),
 	}
 }
 
@@ -96,6 +97,15 @@ func (c *DefaultTypeConverter) ConvertPodWatchEvent(serviceEvent services.PodWat
 	}
 
 	return graphqlEvent
+}
+
+// ConvertPodLogLine converts service layer PodLogLine to GraphQL PodLogLine
+func (c *DefaultTypeConverter) ConvertPodLogLine(serviceLog services.PodLogLine) *model.PodLogLine {
+	return &model.PodLogLine{
+		Timestamp: scalar.Time(serviceLog.Timestamp),
+		Line:      serviceLog.Line,
+		Container: c.stringPtr(serviceLog.Container),
+	}
 }
 
 // MapToKeyValuePairs converts a map[string]string to GraphQL KeyValue pairs
@@ -181,6 +191,11 @@ func (c *CachingTypeConverter) ConvertStatefulSetInfo(statefulSet appsv1.Statefu
 // ConvertPodWatchEvent delegates to wrapped converter
 func (c *CachingTypeConverter) ConvertPodWatchEvent(serviceEvent services.PodWatchEvent) *model.PodWatchEvent {
 	return c.wrapped.ConvertPodWatchEvent(serviceEvent)
+}
+
+// ConvertPodLogLine delegates to wrapped converter
+func (c *CachingTypeConverter) ConvertPodLogLine(serviceLog services.PodLogLine) *model.PodLogLine {
+	return c.wrapped.ConvertPodLogLine(serviceLog)
 }
 
 // MapToKeyValuePairs delegates to wrapped converter

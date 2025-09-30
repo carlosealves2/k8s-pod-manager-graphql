@@ -250,3 +250,7 @@ func (a *PodServiceAdapter) WatchAllPods(ctx context.Context, eventsChan chan<- 
 	opts := &services.WatchOptions{}
 	return a.podService.WatchAllPods(ctx, opts, eventsChan)
 }
+
+func (a *PodServiceAdapter) StreamLogs(ctx context.Context, namespace, podName string, opts *services.LogStreamOptions, logsChan chan<- services.PodLogLine) error {
+	return a.podService.StreamLogs(ctx, namespace, podName, opts, logsChan)
+}

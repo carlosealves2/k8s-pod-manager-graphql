@@ -209,6 +209,7 @@ type Mutation {
 type Subscription {
   watchPods(namespace: String!): PodWatchEvent!
   watchAllPods: PodWatchEvent!
+  streamPodLogs(namespace: String!, name: String!, user: String): PodLogLine!
 }
 
 # WebSocket Event Types
@@ -216,4 +217,11 @@ type PodWatchEvent {
   type: String!
   pod: PodInfo!
   reason: String
+}
+
+# Pod Logs Types
+type PodLogLine {
+  timestamp: Time!
+  line: String!
+  container: String
 }
